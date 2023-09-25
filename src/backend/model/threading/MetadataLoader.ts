@@ -12,6 +12,8 @@ import {IptcParser} from 'ts-node-iptc';
 import {FFmpegFactory} from '../FFmpegFactory';
 import {FfprobeData} from 'fluent-ffmpeg';
 import {Utils} from '../../../common/Utils';
+import * as sharp from 'sharp';
+import {Metadata, Sharp} from 'sharp';
 
 const LOG_TAG = '[MetadataLoader]';
 const ffmpeg = FFmpegFactory.get();
@@ -128,13 +130,13 @@ export class MetadataLoader {
     fileSize: 0,
   };
 
-  public static loadPhotoMetadata(fullPath: string): Promise<PhotoMetadata> {
+  public static async loadPhotoMetadata(fullPath: string): Promise<PhotoMetadata> {
     return new Promise<PhotoMetadata>((resolve, reject) => {
       try {
         const fd = fs.openSync(fullPath, 'r');
 
         const data = Buffer.allocUnsafe(Config.Media.photoMetadataSize);
-        fs.read(fd, data, 0, Config.Media.photoMetadataSize, 0, (err) => {
+        fs.read(fd, data, 0, Config.Media.photoMetadataSize, 0, async (err) => {
           fs.closeSync(fd);
           const metadata: PhotoMetadata = {
             size: {width: 1, height: 1},
@@ -154,117 +156,238 @@ export class MetadataLoader {
             } catch (err) {
               // ignoring errors
             }
+			if (!fullPath.endsWith("avif"))
+			{
+				try {
+				  const exif = ExifParserFactory.create(data).parse();
+				  if (
+					  exif.tags.ISO ||
+					  exif.tags.Model ||
+					  exif.tags.Make ||
+					  exif.tags.FNumber ||
+					  exif.tags.ExposureTime ||
+					  exif.tags.FocalLength ||
+					  exif.tags.LensModel
+				  ) {
+					if (exif.tags.Model && exif.tags.Model !== '') {
+					  metadata.cameraData = metadata.cameraData || {};
+					  metadata.cameraData.model = '' + exif.tags.Model;
+					}
+					if (exif.tags.Make && exif.tags.Make !== '') {
+					  metadata.cameraData = metadata.cameraData || {};
+					  metadata.cameraData.make = '' + exif.tags.Make;
+					}
+					if (exif.tags.LensModel && exif.tags.LensModel !== '') {
+					  metadata.cameraData = metadata.cameraData || {};
+					  metadata.cameraData.lens = '' + exif.tags.LensModel;
+					}
+					if (Utils.isUInt32(exif.tags.ISO)) {
+					  metadata.cameraData = metadata.cameraData || {};
+					  metadata.cameraData.ISO = parseInt('' + exif.tags.ISO, 10);
+					}
+					if (Utils.isFloat32(exif.tags.FocalLength)) {
+					  metadata.cameraData = metadata.cameraData || {};
+					  metadata.cameraData.focalLength = parseFloat(
+						  '' + exif.tags.FocalLength
+					  );
+					}
+					if (Utils.isFloat32(exif.tags.ExposureTime)) {
+					  metadata.cameraData = metadata.cameraData || {};
+					  metadata.cameraData.exposure = parseFloat(
+						  parseFloat('' + exif.tags.ExposureTime).toFixed(6)
+					  );
+					}
+					if (Utils.isFloat32(exif.tags.FNumber)) {
+					  metadata.cameraData = metadata.cameraData || {};
+					  metadata.cameraData.fStop = parseFloat(
+						  parseFloat('' + exif.tags.FNumber).toFixed(2)
+					  );
+					}
+				  }
+				  if (
+					  !isNaN(exif.tags.GPSLatitude) ||
+					  exif.tags.GPSLongitude ||
+					  exif.tags.GPSAltitude
+				  ) {
+					metadata.positionData = metadata.positionData || {};
+					metadata.positionData.GPSData = {};
 
-            try {
-              const exif = ExifParserFactory.create(data).parse();
-              if (
-                  exif.tags.ISO ||
-                  exif.tags.Model ||
-                  exif.tags.Make ||
-                  exif.tags.FNumber ||
-                  exif.tags.ExposureTime ||
-                  exif.tags.FocalLength ||
-                  exif.tags.LensModel
-              ) {
-                if (exif.tags.Model && exif.tags.Model !== '') {
-                  metadata.cameraData = metadata.cameraData || {};
-                  metadata.cameraData.model = '' + exif.tags.Model;
-                }
-                if (exif.tags.Make && exif.tags.Make !== '') {
-                  metadata.cameraData = metadata.cameraData || {};
-                  metadata.cameraData.make = '' + exif.tags.Make;
-                }
-                if (exif.tags.LensModel && exif.tags.LensModel !== '') {
-                  metadata.cameraData = metadata.cameraData || {};
-                  metadata.cameraData.lens = '' + exif.tags.LensModel;
-                }
-                if (Utils.isUInt32(exif.tags.ISO)) {
-                  metadata.cameraData = metadata.cameraData || {};
-                  metadata.cameraData.ISO = parseInt('' + exif.tags.ISO, 10);
-                }
-                if (Utils.isFloat32(exif.tags.FocalLength)) {
-                  metadata.cameraData = metadata.cameraData || {};
-                  metadata.cameraData.focalLength = parseFloat(
-                      '' + exif.tags.FocalLength
-                  );
-                }
-                if (Utils.isFloat32(exif.tags.ExposureTime)) {
-                  metadata.cameraData = metadata.cameraData || {};
-                  metadata.cameraData.exposure = parseFloat(
-                      parseFloat('' + exif.tags.ExposureTime).toFixed(6)
-                  );
-                }
-                if (Utils.isFloat32(exif.tags.FNumber)) {
-                  metadata.cameraData = metadata.cameraData || {};
-                  metadata.cameraData.fStop = parseFloat(
-                      parseFloat('' + exif.tags.FNumber).toFixed(2)
-                  );
-                }
-              }
-              if (
-                  !isNaN(exif.tags.GPSLatitude) ||
-                  exif.tags.GPSLongitude ||
-                  exif.tags.GPSAltitude
-              ) {
-                metadata.positionData = metadata.positionData || {};
-                metadata.positionData.GPSData = {};
+					if (Utils.isFloat32(exif.tags.GPSLongitude)) {
+					  metadata.positionData.GPSData.longitude = parseFloat(
+						  exif.tags.GPSLongitude.toFixed(6)
+					  );
+					}
+					if (Utils.isFloat32(exif.tags.GPSLatitude)) {
+					  metadata.positionData.GPSData.latitude = parseFloat(
+						  exif.tags.GPSLatitude.toFixed(6)
+					  );
+					}
+				  }
+				  if (
+					  exif.tags.CreateDate ||
+					  exif.tags.DateTimeOriginal ||
+					  exif.tags.ModifyDate
+				  ) {
+					metadata.creationDate =
+						(exif.tags.DateTimeOriginal ||
+							exif.tags.CreateDate ||
+							exif.tags.ModifyDate) * 1000;
+				  }
+				  if (exif.imageSize) {
+					metadata.size = {
+					  width: exif.imageSize.width,
+					  height: exif.imageSize.height,
+					};
+				  } else if (
+					  exif.tags.RelatedImageWidth &&
+					  exif.tags.RelatedImageHeight
+				  ) {
+					metadata.size = {
+					  width: exif.tags.RelatedImageWidth,
+					  height: exif.tags.RelatedImageHeight,
+					};
+				  } else if (
+					  exif.tags.ImageWidth &&
+					  exif.tags.ImageHeight
+				  ) {
+					metadata.size = {
+					  width: exif.tags.ImageWidth,
+					  height: exif.tags.ImageHeight,
+					};
+				  } else {
+					const info = imageSize(fullPath);
+					metadata.size = {width: info.width, height: info.height};
+				  }
+				} catch (err) {
+				  Logger.debug(LOG_TAG, 'Error parsing exif', fullPath, err);
+				  try {
+					const info = imageSize(fullPath);
+					metadata.size = {width: info.width, height: info.height};
+				  } catch (e) {
+					metadata.size = {width: 1, height: 1};
+				  }
+				}
+			}
+			else
+			{
+				let image = sharp(fullPath, { failOnError: false });
+				const sharp_metadata: Metadata = await image.metadata();
+				metadata.size = { width: sharp_metadata.width, height: sharp_metadata.height };
 
-                if (Utils.isFloat32(exif.tags.GPSLongitude)) {
-                  metadata.positionData.GPSData.longitude = parseFloat(
-                      exif.tags.GPSLongitude.toFixed(6)
-                  );
-                }
-                if (Utils.isFloat32(exif.tags.GPSLatitude)) {
-                  metadata.positionData.GPSData.latitude = parseFloat(
-                      exif.tags.GPSLatitude.toFixed(6)
-                  );
-                }
-              }
-              if (
-                  exif.tags.CreateDate ||
-                  exif.tags.DateTimeOriginal ||
-                  exif.tags.ModifyDate
-              ) {
-                metadata.creationDate =
-                    (exif.tags.DateTimeOriginal ||
-                        exif.tags.CreateDate ||
-                        exif.tags.ModifyDate) * 1000;
-              }
-              if (exif.imageSize) {
-                metadata.size = {
-                  width: exif.imageSize.width,
-                  height: exif.imageSize.height,
-                };
-              } else if (
-                  exif.tags.RelatedImageWidth &&
-                  exif.tags.RelatedImageHeight
-              ) {
-                metadata.size = {
-                  width: exif.tags.RelatedImageWidth,
-                  height: exif.tags.RelatedImageHeight,
-                };
-              } else if (
-                  exif.tags.ImageWidth &&
-                  exif.tags.ImageHeight
-              ) {
-                metadata.size = {
-                  width: exif.tags.ImageWidth,
-                  height: exif.tags.ImageHeight,
-                };
-              } else {
-                const info = imageSize(fullPath);
-                metadata.size = {width: info.width, height: info.height};
-              }
-            } catch (err) {
-              Logger.debug(LOG_TAG, 'Error parsing exif', fullPath, err);
-              try {
-                const info = imageSize(fullPath);
-                metadata.size = {width: info.width, height: info.height};
-              } catch (e) {
-                metadata.size = {width: 1, height: 1};
-              }
-            }
+				try
+				{
+					const avif_exif: ExifReader.Tags & ExifReader.XmpTags & ExifReader.IccTags = ExifReader.load(sharp_metadata.exif);
 
+					if (avif_exif.LensModel)
+					{
+						metadata.cameraData = metadata.cameraData || {};
+						metadata.cameraData.lens = '' + avif_exif.LensModel.value;
+					}
+
+					if (avif_exif.ISOSpeedRatings)
+					{
+						metadata.cameraData = metadata.cameraData || {};
+						metadata.cameraData.ISO = parseInt('' + avif_exif.ISOSpeedRatings.value, 10);
+					}
+
+					if (avif_exif.ExposureTime)
+					{
+						metadata.cameraData = metadata.cameraData || {};
+						var exposure_strings  = avif_exif.ExposureTime.value.toString().split(',');
+						metadata.cameraData.exposure = Number(exposure_strings[0]) / Number(exposure_strings[1]);
+					}
+
+					if (avif_exif.FNumber)
+					{
+						metadata.cameraData = metadata.cameraData || {};
+						var f_number_strings  = avif_exif.FNumber.value.toString().split(',');
+						metadata.cameraData.fStop = Number(f_number_strings[0]) / Number(f_number_strings[1]);
+					}
+
+					if (avif_exif.Model && avif_exif.Model.value[0] !== '')
+					{
+						metadata.cameraData = metadata.cameraData || {};
+						metadata.cameraData.model = '' + avif_exif.Model.value[0];
+					}
+					if (avif_exif.Make && avif_exif.Make.value[0] !== '')
+					{
+						metadata.cameraData = metadata.cameraData || {};
+						metadata.cameraData.make = '' + avif_exif.Make.value[0];
+					}
+					if (avif_exif.ExposureTime && Utils.isFloat32(avif_exif.ExposureTime.value))
+					{
+						metadata.cameraData = metadata.cameraData || {};
+						metadata.cameraData.exposure = parseFloat(parseFloat('' + avif_exif.ExposureTime.value).toFixed(6));
+					}
+
+					if (avif_exif.FocalLength)
+					{
+						metadata.cameraData = metadata.cameraData || {};
+						var focal_strings  = avif_exif.FocalLength.value.toString().split(',');
+						metadata.cameraData.focalLength = Number(focal_strings[0]) / Number(focal_strings[1]);
+					}
+
+					if (avif_exif.GPSLongitude && avif_exif.GPSLatitude)
+					{
+						metadata.positionData = metadata.positionData || {};
+						metadata.positionData.GPSData = {};
+						var gps_list  = avif_exif.GPSLongitude.value.toString().split(',');
+						var deg = Number(gps_list[0]);
+						var minutes = Number(gps_list[2]) / 60.0;
+						var seconds = Number(gps_list[4]) / Number(gps_list[5]);
+						seconds = seconds / 3600.0;
+						var final_long = deg + minutes + seconds;
+
+						if (avif_exif.GPSLongitudeRef && avif_exif.GPSLongitudeRef.value[0] == 'W')
+						{
+							final_long = -final_long;
+						}
+
+						gps_list  = avif_exif.GPSLatitude.value.toString().split(',');
+						deg = Number(gps_list[0]);
+						minutes = Number(gps_list[2]) / 60.0;
+						seconds = Number(gps_list[4]) / Number(gps_list[5]);
+						seconds = seconds / 3600.0;
+
+						var final_lat = deg + minutes + seconds;
+
+						if (avif_exif.GPSLatitudeRef && avif_exif.GPSLatitudeRef.value[0] == 'S')
+						{
+							final_lat = -final_lat;
+						}
+
+						metadata.positionData.GPSData.longitude = final_long;
+						metadata.positionData.GPSData.latitude = final_lat;
+					}
+
+					if (avif_exif.DateTime || avif_exif.DateTimeOriginal)
+					{
+						var currentTime;
+						if (avif_exif.DateTime)
+						{
+							currentTime   = avif_exif.DateTime.value.toString();
+						}
+						else
+						{
+							currentTime   = avif_exif.DateTimeOriginal.value.toString()
+						}
+						var year = currentTime.substring(0, currentTime.indexOf(':'))
+						var monthPosition = currentTime.split(':', 2).join(':').length;
+						var month         = currentTime.substring(currentTime.indexOf(':') + 1, monthPosition);
+						var day           = currentTime.substring(monthPosition + 1, monthPosition + 3);
+						var current_array =  currentTime.split(':');
+						var minutes_str = current_array[3];
+						var seconds_str = current_array[4];
+						var hour = current_array[2].split(' ')[1];
+						var final_date = month + "/" + day + "/" + year + " " + hour + ":" + minutes_str + ":" + seconds_str;
+						metadata.creationDate = Date.parse(final_date);
+					}
+				}
+				catch (e)
+				{
+					Logger.debug(" Failed to load " + fullPath + " metadata.")
+				}
+			}
             try {
               const iptcData = IptcParser.parse(data);
               if (iptcData.country_or_primary_location_name) {
